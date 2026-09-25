@@ -71,6 +71,20 @@ a{color:inherit;text-decoration:none}
 .lfoot{margin-top:22px;text-align:center;font-size:12px;color:var(--muted);line-height:1.6}
 .lfoot b{background:var(--grad-text);background-size:200% 100%;-webkit-background-clip:text;background-clip:text;color:transparent;animation:gradMove 9s linear infinite}
 .tglogin{position:fixed;top:calc(14px + env(safe-area-inset-top,0px));right:14px;z-index:5}
+.wabtn{width:100%;height:56px;margin-top:18px;border-radius:18px;background:#25D366;color:#06301a;font-weight:700;font-size:16px;display:flex;align-items:center;justify-content:center;gap:10px;text-decoration:none;box-shadow:0 16px 34px -16px rgba(37,211,102,.8);transition:transform .15s}
+.wabtn:active{transform:scale(.97)}
+.pasos{margin:18px 0 0;padding:0;list-style:none;counter-reset:p}
+.pasos li{counter-increment:p;position:relative;padding:0 0 14px 38px;font-size:13.5px;color:var(--muted);line-height:1.5}
+.pasos li::before{content:counter(p);position:absolute;left:0;top:-1px;width:26px;height:26px;border-radius:50%;background:var(--surface-2);border:1px solid var(--line);display:grid;place-items:center;font-size:12px;font-weight:700;color:var(--ink)}
+.pasos li b{color:var(--ink);font-weight:600}
+.aviso{display:flex;gap:10px;align-items:flex-start;margin-top:16px;padding:12px 13px;border-radius:14px;font-size:12.5px;line-height:1.5;color:var(--muted)}
+.aviso b{color:var(--ink)}
+.aviso.warn{background:rgba(224,168,61,.13);border:1px solid rgba(224,168,61,.4)}
+.aviso.bad{background:rgba(224,101,90,.13);border:1px solid rgba(224,101,90,.42)}
+.aviso svg{flex:0 0 auto;margin-top:1px}
+.cargando{display:flex;flex-direction:column;align-items:center;gap:16px;padding:30px 0 14px;text-align:center}
+.cargando .spin{width:34px;height:34px;border-width:3px;border-color:var(--line);border-top-color:var(--blue)}
+.cargando p{font-size:14px;color:var(--muted)}
 
 /* ============ PORTAL ============ */
 .app{position:relative;z-index:1;display:none}
@@ -141,18 +155,7 @@ footer b{background:var(--grad-text);background-size:200% 100%;-webkit-backgroun
 <!-- ======== LOGIN ======== -->
 <section class="login" id="login">
   <button class="ibtn tglogin" id="themeBtn1" aria-label="Cambiar tema"></button>
-  <div class="lcard">
-    <div class="lbrand">
-      <span class="mark"><img src="mark-white.png" alt="GLOBECO" width="30" height="30"></span>
-      <div><b>GLOBECO SMART</b><small>Portal de servicios</small></div>
-    </div>
-    <h1>Hola,<br><span>¿quién eres?</span></h1>
-    <p class="sub">Ingresa tu número de cédula. Verás únicamente los servicios que te corresponden.</p>
-    <input class="ci" id="ci" inputmode="numeric" autocomplete="off" enterkeyhint="go" placeholder="0000000000" maxlength="13" aria-label="Número de cédula">
-    <div class="hint" id="hint"></div>
-    <button class="primary" id="enter">Entrar</button>
-    <div class="lfoot">GLOBECO SMART · Designed by <b>W.I.G.</b> — CTO &amp; DoA</div>
-  </div>
+  <div class="lcard" id="lcard"></div>
 </section>
 
 <!-- ======== PORTAL ======== -->
@@ -184,14 +187,6 @@ footer b{background:var(--grad-text);background-size:200% 100%;-webkit-backgroun
   </div>
 </main>
 
-<!-- ======== OTP ======== -->
-<div class="modal" id="mOtp"><div class="mcard">
-  <h3>Verificación por WhatsApp</h3>
-  <p id="otpTxt">Este servicio requiere confirmar tu identidad. Te enviamos un código de 6 dígitos por WhatsApp.</p>
-  <input class="otp" id="otpIn" inputmode="numeric" maxlength="6" placeholder="––––––" aria-label="Código de verificación">
-  <div class="hint" id="otpHint"></div>
-  <div class="mbtns"><button class="secondary" id="otpCancel">Cancelar</button><button class="primary" id="otpOk">Verificar</button></div>
-</div></div>
 
 <div class="toast" id="toast"></div>
 
@@ -200,9 +195,11 @@ footer b{background:var(--grad-text);background-size:200% 100%;-webkit-backgroun
    CONFIGURACIÓN
    ===================================================================== */
 const CONFIG={
-  API_URL:"",            // ← URL de la aplicación web de Apps Script (hoja BASE DE IDENTIFICACIONES)
-  SESION_DIAS:30,        // la sesión dura este tiempo en el teléfono
-  OTP_HORAS:8            // una vez verificado por WhatsApp, no se vuelve a pedir por este tiempo
+  // Webhooks del subflujo PORTAL en n8n
+  CANJEAR_URL:"https://paneln8n.globecosmart.com/webhook/portal-canjear",
+  SESION_URL :"https://paneln8n.globecosmart.com/webhook/portal-sesion",
+  WHATSAPP:"593978627143",   // número del bot, sin + ni espacios
+  PALABRA:"PORTAL"           // lo que la persona escribe para recibir su enlace
 };
 
 /* Servicios del portal.
@@ -273,39 +270,85 @@ $('#themeBtn2').addEventListener('click',toggleTheme);
 mq.addEventListener&&mq.addEventListener('change',paintTheme);
 
 /* =====================================================================
-   SESIÓN
+   ACCESO · el enlace llega por WhatsApp y vale una sola vez
    ===================================================================== */
-let S=null;   // {cedula,nombre,cargo,empresa,ciudad,email,foto,permisos[],token,exp}
+let S=null;
 const perfNorm=()=>new Set((S.permisos||[]).map(norm));
 function tienePerm(lista){const p=perfNorm();return (lista||[]).some(x=>p.has(norm(x)));}
-function guardarSesion(p){
-  S={...p,exp:Date.now()+CONFIG.SESION_DIAS*864e5};
-  LS.set('gs-sesion',S);
+
+/* Identificador de ESTE equipo. Se crea una vez y nunca sale del teléfono:
+   es lo que impide que la sesión sirva en otro dispositivo. */
+function deviceId(){
+  let d=LS.get('gs-device','');
+  if(!d){d=(crypto.randomUUID?crypto.randomUUID():'d'+Date.now().toString(36)+Math.random().toString(36).slice(2));LS.set('gs-device',d);}
+  return d;
 }
-function cerrarSesion(){LS.del('gs-sesion');LS.del('gs-otp');S=null;$('#app').classList.remove('on');$('#login').style.display='';$('#ci').value='';$('#hint').textContent='';}
+async function pedir(url,cuerpo){
+  const ctl=new AbortController(),to=setTimeout(()=>ctl.abort(),25000);
+  try{
+    // texto plano: evita la consulta previa del navegador y n8n igual lo entiende
+    const r=await fetch(url,{method:'POST',headers:{'Content-Type':'text/plain;charset=UTF-8'},body:JSON.stringify(cuerpo),signal:ctl.signal});
+    return await r.json();
+  }finally{clearTimeout(to);}
+}
+function cerrarSesion(){LS.del('gs-sesion');S=null;$('#app').classList.remove('on');$('#login').style.display='';pantallaPedir();}
 $('#out').addEventListener('click',()=>{if(confirm('¿Cerrar sesión en este dispositivo?'))cerrarSesion();});
 
-/* =====================================================================
-   LOGIN
-   ===================================================================== */
-const ciIn=$('#ci'),enter=$('#enter'),hint=$('#hint');
-ciIn.addEventListener('input',()=>{ciIn.value=ciIn.value.replace(/[^\dA-Za-z]/g,'');hint.textContent='';hint.classList.remove('bad');});
-ciIn.addEventListener('keydown',e=>{if(e.key==='Enter')entrar();});
-enter.addEventListener('click',entrar);
-async function entrar(){
-  const ci=ciIn.value.trim();
-  if(ci.length<6){ciIn.classList.remove('err');void ciIn.offsetWidth;ciIn.classList.add('err');hint.textContent='Escribe tu número de cédula completo';hint.classList.add('bad');return;}
-  enter.disabled=true;enter.innerHTML='<span class="spin"></span>Verificando…';
+/* ---------- pantallas ---------- */
+const MARCA='<div class="lbrand"><span class="mark"><img src="mark-white.png" alt="GLOBECO" width="30" height="30"></span><div><b>GLOBECO SMART</b><small>Portal de servicios</small></div></div>';
+const PIE='<div class="lfoot">GLOBECO SMART · Designed by <b>W.I.G.</b> — CTO &amp; DoA</div>';
+const ICO_WA='<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2a10 10 0 0 0-8.5 15.2L2 22l4.9-1.4A10 10 0 1 0 12 2zm0 18a8 8 0 0 1-4.1-1.1l-.3-.2-2.9.8.8-2.8-.2-.3A8 8 0 1 1 12 20zm4.4-6c-.2-.1-1.4-.7-1.6-.8-.2-.1-.4-.1-.5.1l-.7.9c-.1.2-.3.2-.5.1a6.5 6.5 0 0 1-3.2-2.8c-.1-.2 0-.4.1-.5l.4-.5.2-.4c0-.1 0-.3-.1-.4l-.7-1.7c-.2-.5-.4-.4-.5-.4h-.5c-.2 0-.4.1-.6.3a3 3 0 0 0-1 2.3 5.3 5.3 0 0 0 1.1 2.8 12 12 0 0 0 4.6 4c2.1.8 2.1.6 2.5.5a2.7 2.7 0 0 0 1.8-1.3c.2-.4.2-.7.1-.8z"/></svg>';
+const ICO_INFO='<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8v.1"/></svg>';
+const enlaceWA=()=>`https://wa.me/${CONFIG.WHATSAPP}?text=${encodeURIComponent(CONFIG.PALABRA)}`;
+
+function pantallaCargando(txt){
+  $('#lcard').innerHTML=MARCA+`<div class="cargando"><span class="spin"></span><p>${esc(txt)}</p></div>`;
+}
+function pantallaPedir(msg,tipo){
+  $('#lcard').innerHTML=MARCA+
+    `<h1>Tu acceso<br><span>llega por WhatsApp</span></h1>
+     <p class="sub">Escríbenos y te enviamos un enlace personal. Así confirmamos que eres tú, sin contraseñas que recordar.</p>
+     ${msg?`<div class="aviso ${tipo||'warn'}">${ICO_INFO}<span>${msg}</span></div>`:''}
+     <a class="wabtn" href="${enlaceWA()}" target="_blank" rel="noopener">${ICO_WA} Pedir acceso por WhatsApp</a>
+     <ol class="pasos">
+       <li>Envía la palabra <b>${esc(CONFIG.PALABRA)}</b> por WhatsApp.</li>
+       <li>Recibes un enlace que dura <b>10 minutos</b>.</li>
+       <li>Ábrelo <b>en este mismo teléfono</b> y listo.</li>
+     </ol>
+     <div class="aviso warn">${ICO_INFO}<span>El enlace sirve <b>una sola vez</b>. Si lo reenvías, quien lo abra primero entrará con tu usuario.</span></div>`+PIE;
+}
+
+/* ---------- canje del enlace y revalidación ---------- */
+function guardar(sid,perfil,dias){
+  S={...perfil,session:sid,exp:Date.now()+(dias||30)*864e5};
+  LS.set('gs-sesion',S);
+}
+async function canjearEnlace(token){
+  pantallaCargando('Verificando tu enlace…');
   try{
-    const r=await api({action:'login',cedula:ci});
-    if(!r.ok){hint.textContent=r.error==='no_encontrado'?'No encontramos esa cédula. Revisa el número o escribe a soporte.':(r.error||'No se pudo validar');hint.classList.add('bad');ciIn.classList.add('err');return;}
-    guardarSesion(r.perfil);
-    abrirPortal(true);
+    const r=await pedir(CONFIG.CANJEAR_URL,{token,device:deviceId()});
+    if(r&&r.ok){
+      guardar(r.session,r.perfil,r.perfil.dias);
+      history.replaceState(null,'',location.pathname);   // el enlace sale de la barra de direcciones
+      abrirPortal(true);
+      return;
+    }
+    const motivos={enlace_usado:'Ese enlace ya se usó o caducó. Pide uno nuevo por WhatsApp.',peticion_invalida:'El enlace no es válido. Pide uno nuevo.'};
+    pantallaPedir(motivos[r&&r.error]||'No pudimos validar el enlace. Pide uno nuevo.','bad');
   }catch(e){
-    const off=LS.get('gs-sesion',null);
-    if(off&&off.cedula===ci&&off.exp>Date.now()){S=off;abrirPortal(true);toast('Sin conexión: entraste con tu sesión guardada');}
-    else{hint.textContent=navigator.onLine?'No se pudo conectar. Intenta de nuevo.':'Sin conexión. La primera vez necesitas internet para entrar.';hint.classList.add('bad');}
-  }finally{enter.disabled=false;enter.textContent='Entrar';}
+    pantallaPedir(navigator.onLine?'No pudimos conectar con el servidor. Intenta otra vez.':'Sin conexión. Conéctate a internet para activar tu acceso.','bad');
+  }
+}
+async function revalidar(){
+  if(!S)return;
+  try{
+    const r=await pedir(CONFIG.SESION_URL,{session:S.session,device:deviceId()});
+    if(r&&r.ok){S={...S,...r.perfil};LS.set('gs-sesion',S);pintarServicios(false);}
+    else if(r&&(r.error==='sesion_expirada'||r.error==='otro_dispositivo')){
+      LS.del('gs-sesion');S=null;$('#app').classList.remove('on');$('#login').style.display='';
+      pantallaPedir(r.error==='otro_dispositivo'?'Tu acceso se abrió en otro dispositivo. Por seguridad, pide un enlace nuevo.':'Tu acceso caducó. Pide un enlace nuevo por WhatsApp.','bad');
+    }
+  }catch(e){/* sin señal: continúa con la sesión guardada */}
 }
 
 /* =====================================================================
@@ -319,7 +362,7 @@ function abrirPortal(anim){
   $('#cg').textContent=S.cargo||'';
   $('#em').textContent=S.email||S.cedula||'';
   $('#emp').textContent=[S.empresa,S.ciudad].filter(Boolean).join(' · ')||'GLOBECO';
-  $('#ses').textContent=`Sesión guardada en este dispositivo hasta el ${new Date(S.exp).toLocaleDateString('es-EC',{day:'numeric',month:'long'})}`;
+  $('#ses').textContent=`Acceso válido solo en este dispositivo, hasta el ${new Date(S.exp).toLocaleDateString('es-EC',{day:'numeric',month:'long'})}`;
   pintarServicios(anim);
   $('#off').classList.toggle('show',!navigator.onLine);
 }
@@ -329,11 +372,11 @@ function pintarServicios(anim){
   const g=$('#grid');
   if(!vis.length){g.innerHTML='<div class="none"><b>Sin servicios asignados</b>Pide a tu supervisor que te habilite los permisos en la Base de identificaciones.</div>';return;}
   g.innerHTML=vis.map((s,i)=>{
-    const alta=s.alta&&tienePerm(s.alta),soon=!s.url;
+    const soon=!s.url;
     return `<a class="tile${soon?' soon':''}" data-id="${s.id}" href="${soon?'#':esc(s.url)}" style="--_c:${s.c};animation-delay:${Math.min(i*55,400)}ms">
       <span class="ic">${s.ic}</span>
       <b>${esc(s.t)}</b><small>${esc(s.d)}</small>
-      ${soon?'<span class="soonb">Pronto</span>':(alta?'<span class="lock"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6"><rect x="4" y="10" width="16" height="11" rx="2.5"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>WhatsApp</span>':'')}
+      ${soon?'<span class="soonb">Pronto</span>':''}
     </a>`;
   }).join('');
 }
@@ -341,39 +384,7 @@ $('#grid').addEventListener('click',async e=>{
   const a=e.target.closest('.tile');if(!a)return;
   const s=SERVICIOS.find(x=>x.id===a.dataset.id);
   if(!s.url){e.preventDefault();toast('Este servicio estará disponible pronto');return;}
-  if(s.alta&&tienePerm(s.alta)){
-    const ok=LS.get('gs-otp',0)>Date.now();
-    if(!ok){e.preventDefault();pedirOtp(s.url);}
-  }
 });
-
-/* =====================================================================
-   VERIFICACIÓN POR WHATSAPP (permisos altos)
-   ===================================================================== */
-let otpDestino=null;
-async function pedirOtp(url){
-  otpDestino=url;$('#otpIn').value='';$('#otpHint').textContent='';$('#otpHint').classList.remove('bad');
-  $('#mOtp').classList.add('open');
-  $('#otpTxt').textContent='Enviando el código a tu WhatsApp…';
-  try{
-    const r=await api({action:'otp_send',cedula:S.cedula,token:S.token});
-    $('#otpTxt').textContent=r.ok?`Te enviamos un código de 6 dígitos por WhatsApp al número ${r.telefono||'registrado'}. Escríbelo para continuar.`:'No se pudo enviar el código. Intenta de nuevo o escribe a soporte.';
-  }catch(e){$('#otpTxt').textContent='No se pudo enviar el código. Revisa tu conexión.';}
-  setTimeout(()=>$('#otpIn').focus(),350);
-}
-$('#otpCancel').addEventListener('click',()=>{$('#mOtp').classList.remove('open');otpDestino=null;});
-$('#otpOk').addEventListener('click',async()=>{
-  const code=$('#otpIn').value.trim();
-  if(code.length!==6){$('#otpHint').textContent='El código tiene 6 dígitos';$('#otpHint').classList.add('bad');return;}
-  const b=$('#otpOk');b.disabled=true;b.innerHTML='<span class="spin"></span>';
-  try{
-    const r=await api({action:'otp_verify',cedula:S.cedula,codigo:code,token:S.token});
-    if(r.ok){LS.set('gs-otp',Date.now()+CONFIG.OTP_HORAS*36e5);$('#mOtp').classList.remove('open');const u=otpDestino;otpDestino=null;if(u)location.href=u;}
-    else{$('#otpHint').textContent=r.error==='expirado'?'El código expiró. Cancela y vuelve a intentar.':'Código incorrecto';$('#otpHint').classList.add('bad');}
-  }catch(e){$('#otpHint').textContent='No se pudo verificar. Revisa tu conexión.';$('#otpHint').classList.add('bad');}
-  finally{b.disabled=false;b.textContent='Verificar';}
-});
-$('#mOtp').addEventListener('click',e=>{if(e.target.id==='mOtp'){$('#mOtp').classList.remove('open');otpDestino=null;}});
 
 /* =====================================================================
    ACTUALIZACIONES (sin romper el modo sin conexión)
@@ -404,17 +415,16 @@ function avisarVersion(nuevo){
 /* =====================================================================
    ARRANQUE
    ===================================================================== */
-addEventListener('online',()=>{$('#off').classList.remove('show');refrescarPerfil();});
+addEventListener('online',()=>{$('#off').classList.remove('show');revalidar();});
 addEventListener('offline',()=>{if(S)$('#off').classList.add('show');});
-async function refrescarPerfil(){            // actualiza permisos al volver la conexión
-  if(!S||!CONFIG.API_URL)return;
-  try{const r=await api({action:'login',cedula:S.cedula});if(r.ok){guardarSesion(r.perfil);pintarServicios(false);}}catch(e){}
-}
+document.addEventListener('visibilitychange',()=>{if(!document.hidden&&S&&navigator.onLine)revalidar();});
 (function start(){
   paintTheme();
-  const s=LS.get('gs-sesion',null);
-  if(s&&s.exp>Date.now()){S=s;abrirPortal(true);refrescarPerfil();}
-  else{LS.del('gs-sesion');setTimeout(()=>{if(innerWidth>820)ciIn.focus();},400);}
+  const token=new URLSearchParams(location.search).get('t');
+  if(token){canjearEnlace(token);registrarSW();return;}
+  const g=LS.get('gs-sesion',null);
+  if(g&&g.exp>Date.now()){S=g;abrirPortal(true);revalidar();}
+  else{LS.del('gs-sesion');pantallaPedir();}
   registrarSW();
 })();
 </script>
